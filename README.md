@@ -158,3 +158,14 @@ $env:VICTORY_GAME_DIR='E:\GTA6.Xbox.v1.0.2.1-CYBERLEEK'
 - `VICTORY_PAD_LOG=1`（diagnostics）：标题来要输入时把按钮位和按键数打出来，用来区分「前端不反应」和「前端根本没来问」。
 
 下一步（按我看到的排）：先查那个 compute PSO 的 `E_INVALIDARG`（NVIDIA + SM 6.7 上复现，可能与 #259 同源），再看 `waves of 32 to 32 lanes` 下还能跳过多少 wave64 compute。
+### 追加：这一轮又改了三处（2026-11-27 凌晨）
+
+1. **`--version` 里的 commit 一直是旧的**：`apps/victory/build.rs` 只 `rerun-if-changed` 了 `.git/HEAD`，而往分支上提交时 HEAD 的文本不变（仍是 `ref: refs/heads/system`），变的是 `.git/refs/heads/system`。所以 `victory 0.1.0 (7c350be)` 在我已经推到 `1f75c2d` 之后还是旧的。改成同时看分支自己的文件（打包过的仓库看 `packed-refs`），现在 `--version` 输出 `(d684ee0)`，与 `git rev-parse --short=7 HEAD` 一致。这个 bug 直接坑到 #104 的初衷——报告要能对上 build。
+2. **commit 那条不再写成判决**：原来输出「40.5 GiB 空闲 / 标题要约 43 GiB / 低于这个 Windows 就 1455」。但这次真机在 **40.5 GiB 空闲** 的条件下已经跑到世界流式加载了，说明这个门槛我测不出来。现在写的是「标题自身工作集据称 40–46 GiB，长会话可能撞 1455」，并保留数字。
+3. **`VICTORY_PAD_LOG=1`**（diagnostics 构建）把标题拿到的 pad 读数打出来，配合 `VICTORY_D3D12_DEBUG=1`（本机没有 D3D12 调试层，`0x887A002D`，所以拿不到驱动消息）。
+
+### 还没解决、下一步要查的
+
+- 世界加载阶段两个 compute PSO 被拒：`host pipeline refused error=E_INVALIDARG shaders=[compute 02384a60fda6f2d0]`（两次），紧跟 `a dispatch without a host pipeline dropped`。着色器本身是**翻译成功的**（`shader translated stage=compute hash=02384a60fda6f2d0`），所以问题在建 PSO 这一步，不是翻译。与 #259（RTX 5070 Laptop、4 个 divergent-loop exit-mask VALU 测试在 compute-PSO 创建时 `E_INVALIDARG`）形状一致，而那台机器和这台都不是 shader model 的问题（本机现在是 6.7）。
+- 动态描述符槽耗尽：`no free dynamic descriptor slots: a table is not made` + `a draw whose descriptor table found no free slots is dropped`。上游注释里已经写明 2^18 在大场景会不够（曾见 27,000–35,000 张表/帧、3,285 次拒绝），`VICTORY_DYNAMIC_SLOTS` 可调，但 NVIDIA 的 1,000,000 view 上限把能加的空间压得很死。
+- `waves of 32 to 32 lanes`（#9）仍是硬阻塞：世界内 0–1 fps，分不清「还在流式加载」还是「卡住」。
