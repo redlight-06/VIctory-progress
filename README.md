@@ -1,4 +1,4 @@
-# VIctory 进度跟踪（Xbox Series X 版 GTA6 → Windows）
+﻿# VIctory 进度跟踪（Xbox Series X 版 GTA6 → Windows）
 
 个人跟踪 [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD) 的笔记：现状、我和上游的交互、本机验证结果。
 上游不是我的项目；这里记录的是**我读到的**和**我验证过的**，两类分开写。
@@ -72,20 +72,22 @@
 VIctory 0.1.0 (81ebb7b), debug build
 Windows 11, build 26100.3624
 CPU: AMD Ryzen 9 8945HX with Radeon Graphics, 32 threads, AVX2 yes
-Memory: 31.8 GiB RAM (17.7 GiB free), commit 42.6 GiB free of 75.7 GiB
+Memory: 31.8 GiB RAM (18.1 GiB free), commit 42.5 GiB free of 75.7 GiB
 GPU (used): NVIDIA GeForce RTX 5060 Laptop GPU [10de:2d59], driver 32.0.15.9621, 7899 MiB dedicated, 16280 MiB shared
     shader model 6.3, mesh shaders yes, waves of 32 to 32 lanes, resource binding tier 3, view heap of 1000000 views, enough for the title's, GPU upload heap yes
 Known blockers:
 - Waves of 32 to 32 lanes: console wave64 compute programs are dropped where their cross-lane code cannot be split (#9)
 - Shader model 6.3: the title's shaders are written for 6.6 and above
-- 42.6 GiB of commit free: the title asks for about 43 GiB and Windows refuses 1455 below that
+- 42.5 GiB of commit free: the title asks for about 43 GiB and Windows refuses 1455 below that
 ```
+
+（这是某一次运行的快照：内存空闲量两次运行之间会浮动，阻塞项的上限判断不受影响。）
 
 三条读法：
 
 1. **32 lane 的 wave** 是 NVIDIA 的常态，上游 wave64 模拟（#9）决定这里能不能跑 compute；这是跨厂商必须面对的一项。
 2. **shader model 6.3** 是这台机器 `D3D12_FEATURE_SHADER_MODEL` 的真实回答（问 6.4–6.9 一律回 6.3），而 `crates/victory-shader/src/emit/host.rs:107` 自己的门要求 ≥6.6。这条是否与 #259（RTX 5070 Laptop 创 compute PSO 报 `E_INVALIDARG`）同源，等报 #259 的人贴这份输出就能确认。
-3. **commit 42.6 GiB free** 低于 title 要的约 43 GiB，Windows 会直接 `1455`——这解释了内存小的机器为什么起不来。
+3. **commit 42.5 GiB free** 低于 title 要的约 43 GiB，Windows 会直接 `1455`——这解释了内存小的机器为什么起不来。
 
 ---
 
