@@ -1,9 +1,9 @@
-﻿# VIctory 进度跟踪（Xbox Series X 版 GTA6 → Windows）
+# VIctory 进度跟踪（Xbox Series X 版 GTA6 → Windows）
 
 个人跟踪 [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD) 的笔记：现状、我和上游的交互、本机验证结果。
 上游不是我的项目；这里记录的是**我读到的**和**我验证过的**，两类分开写。
 
-最后更新：2026-11-26（北京时间）。
+最后更新：2026-11-27（北京时间）。
 
 ---
 
@@ -124,3 +124,37 @@ cargo build -p victory
 ```
 
 已知限制：`cargo test --workspace` 里只有 `victory-loader --test load_probe` 会失败，原因是 GNU ld 不认 MSVC 的 `/DELAYLOAD:` 链接选项（环境限制，不是仓库 bug）；其余全部通过（`victory-gpu` 411 个测试里 278 个真跑在 D3D12 上，耗时约 6.5 分钟）。
+
+---
+
+## 六、真机跑通：从标题画面到世界加载（2026-11-27，本机实测）
+
+把完整游戏文件放在 `E:\GTA6.Xbox.v1.0.2.1-CYBERLEEK`（208.6 GB / 110 个文件；`levels.rpf` 70.92 GB、`audio.rpf` 26.58 GB、`movies.rpf` 8.23 GB …），配上分支 `system` 的构建跑起来的结果：
+
+**必须设的三个环境变量**（`C:\Users\Y\AppData\Local` 在本机不可写，默认缓存目录会直接失败）：
+
+```powershell
+$env:VICTORY_CACHE_DIR='E:\Deep\victory-data\cache'
+$env:VICTORY_DATA_DIR='E:\Deep\victory-data\data'
+$env:VICTORY_GAME_DIR='E:\GTA6.Xbox.v1.0.2.1-CYBERLEEK'
+```
+
+跑起来之后：
+
+1. **标题画面**：进入 Xbox 账号选择（`ACCOUNT PICKER (Y) / SCREEN NARRATION (OFF) (X) / PLAYER (A)`），稳定 30 fps、`21 draws/frame`。
+2. **键盘可用，但要窗口在前台**：`SetForegroundWindow` 单独调用会被拒，先敲一下 Alt 再调就成功；窗口一旦有焦点，`GetAsyncKeyState` 的按键会经 stand-in pad 送进标题。按键映射见 `crates/victory-hle/src/modules/gameinput.rs`：Enter=A、Backspace=B、Esc=Menu、Tab=View、方向键=DPad。
+3. **首次启动流程走得通**：语言（English）→ 导航体验 → 法律声明 → 隐私政策 / 服务条款两个勾选 → Confirm → 进入世界流式加载。
+4. **进到世界加载**：日志里开始打开 `core_restofworld.rpf`、`story000_restofworld.rpf`，帧变成 400–2,800 draws/frame、0–1 fps（0.8–2.7 s 一帧），私有内存约 15.7 GB 且继续上涨。我在这主动停掉——这是 `waves of 32 to 32 lanes`（#9）在起作用，不是崩溃。
+
+期间值得追的警告（都在加载阶段冒出来）：
+
+- `victory_gpu::pipeline::host: host pipeline refused error=E_INVALIDARG shaders=[compute 2da4beb386509b77]`（两次）——一个 compute PSO 建不起来；
+- `victory_gpu::draw: a dispatch without a host pipeline dropped pipeline=0x2a2d59f7160`；
+- `victory_gpu::descriptor::host: placed unordered texture view not mirrored`。
+
+**这一轮改掉的两个东西**（都在 PR #268 里）：
+
+- `system` 的着色器模型解码：`D3D_SHADER_MODEL_6_0` 是 `0x60` 不是 100，所以设备回的 `0x67` 是 **6.7**；原来的写法把本机报成 6.3，还顺手给出「标题的 shader 要 6.6」这条假阻塞。修完 `victory system` 输出 6.7，而运行时 mesh pipeline 确实建得起来，两边对上了。
+- `VICTORY_PAD_LOG=1`（diagnostics）：标题来要输入时把按钮位和按键数打出来，用来区分「前端不反应」和「前端根本没来问」。
+
+下一步（按我看到的排）：先查那个 compute PSO 的 `E_INVALIDARG`（NVIDIA + SM 6.7 上复现，可能与 #259 同源），再看 `waves of 32 to 32 lanes` 下还能跳过多少 wave64 compute。
