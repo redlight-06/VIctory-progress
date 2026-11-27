@@ -169,3 +169,46 @@ $env:VICTORY_GAME_DIR='E:\GTA6.Xbox.v1.0.2.1-CYBERLEEK'
 - 世界加载阶段两个 compute PSO 被拒：`host pipeline refused error=E_INVALIDARG shaders=[compute 02384a60fda6f2d0]`（两次），紧跟 `a dispatch without a host pipeline dropped`。着色器本身是**翻译成功的**（`shader translated stage=compute hash=02384a60fda6f2d0`），所以问题在建 PSO 这一步，不是翻译。与 #259（RTX 5070 Laptop、4 个 divergent-loop exit-mask VALU 测试在 compute-PSO 创建时 `E_INVALIDARG`）形状一致，而那台机器和这台都不是 shader model 的问题（本机现在是 6.7）。
 - 动态描述符槽耗尽：`no free dynamic descriptor slots: a table is not made` + `a draw whose descriptor table found no free slots is dropped`。上游注释里已经写明 2^18 在大场景会不够（曾见 27,000–35,000 张表/帧、3,285 次拒绝），`VICTORY_DYNAMIC_SLOTS` 可调，但 NVIDIA 的 1,000,000 view 上限把能加的空间压得很死。
 - `waves of 32 to 32 lanes`（#9）仍是硬阻塞：世界内 0–1 fps，分不清「还在流式加载」还是「卡住」。
+## 七、上游已到 cd8dfc0：世界画面出来了，`E_INVALIDARG` 那条看清了（2026-11-27 上午）
+
+### 上游变动
+
+中间隔了两小时回来拉，上游已经 **force-push 重写历史**：`81ebb7b` 不再是新历史的祖先，现在 tip 是 `cd8dfc0`。
+
+- `3406192` renderer port 7（`VICTORY_PORT_JOURNAL=1`，默认关；lane −2.4 ms，45.8 → 45.1 ms）
+- `5d6bd84` 标题纹理改在 submission prelude 里上传（修帧序与闪烁）
+- `cd8dfc0` FidelityFX FSR 4.1.2 到 4K（`-Fsr4K`，从 DexNom/VIctory 的 ab34a8b2 移植）
+
+因为历史被重写，普通 `git rebase FETCH_HEAD` 会变成一堆 add/add 冲突；改用 `git rebase --onto FETCH_HEAD 81ebb7b system` 把 5 个提交干净重放，再 `push --force` 覆盖 fork 分支。
+
+### 真机：世界画面出来了
+
+在新基上重跑到世界，画面是真的世界（不是黑屏）：蓝色天空、楼房、成排电线杆和电线、亮着的窗户、路灯、树，截图 `run8_b.png`。数字：
+
+- `2019 draws/frame`、`0 fps 2054.8 ms/frame`，WS 7,185 MB；稍后又到过 `4,233 draws/frame`、后来 `5,182 draws/frame`
+- 掉帧统计里最大的一项是 `397.0/frame` 的 `a stage of the ray-tracing pipeline is not translated`
+
+### `E_INVALIDARG` 不是驱动坏，是 console wave64
+
+之前那条 `host pipeline refused error=E_INVALIDARG shaders=[compute 02384a60fda6f2d0]` 看着像驱动/PSO 故障，实际是 **#9 在 PSO 创建这一步现身**：
+
+1. 用空缓存 `victory translate --warm` 重翻那个 shader，缓存里是 `VSH2` 包装（magic + u32 source 长度 + source + u32 stage + u32 DXIL 长度 + DXIL）。
+2. 解出 DXIL 后 `dxv.exe` 说 **`Validation succeeded.`** —— 字节码合法。
+3. `dxc.exe -dumpbin` 才露出真因：`NumThreads=(128,1,1)`、**`WaveSize=64`**。
+4. 本机是 32 宽 wave（`waves of 32 to 32 lanes`）。`emit/lower.rs:1841-1852` 只在能被 32 半波切开时才把 `wave` 降到 32，切不开就保留 `WaveSize(64)`，于是 `CreateComputePipelineState` 必然 `E_INVALIDARG`，而日志只印了「参数错误」。
+
+所以我加了一处判断，让它在建 PSO 之前就说清楚：`victory_shader::dxbc::wave_size` 从 `PSV0` 里读容器声明的宽度（`min == max` 才是硬声明，`0`/`u32::MAX` 视为没声明），`pipeline/host.rs` 拿它和 `host_settings()[0]`（本机 = 32）比较，超过就 `return None` 并打：
+
+```
+WARN victory_gpu::pipeline::host: no host pipeline: the compute program asks for wider waves
+     than the host runs shaders=[compute 02384a60fda6f2d0] wave=64 host_wave=32
+```
+
+同一个 run 里 `host pipeline refused` 出现 **0 次**（之前每次都会报 `E_INVALIDARG`），世界照常推进到 `5,182 draws/frame`。提交 `bb666a6`，已推 fork，PR #268 多一条评论（含复现步骤）。
+
+### 还没解决
+
+- **397 draws/frame 的 ray-tracing stage 没翻**（`a stage of the ray-tracing pipeline is not translated`）——这是世界内最大的单项掉帧。
+- **动态描述符槽耗尽**：`no free dynamic descriptor slots`，大场景需要比 2^18 更多的表。
+- **wave64 本身**：`waves of 32 to 32 lanes` 仍是硬阻塞，世界内 0–1 fps。现在至少有名字了，不再是「驱动坏了」。
+- 世界内还没真正「玩」——只到能渲染、能看到画面和 HUD 的程度。
