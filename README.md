@@ -2,15 +2,23 @@
 
 这份笔记跟着 [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD) 走。上游不是我的项目，我只是提 PR、在自己的笔记本上跑。内容分两种：从上游 README 和 docs 里读到的，和我自己跑出来的。前者会写明是读来的，没写的就是我这边实测。
 
-最后更新：2026-11-27 上午。
+最后更新：2026-11-27 晚上。
 
 ## 现在的状态
 
-上游今天上午 force-push 重写了历史，`81ebb7b` 不再是新历史的祖先，tip 变成 `cd8dfc0`。我用 `git rebase --onto FETCH_HEAD 81ebb7b system` 把 6 个提交重放上去，fork 的 `system` 现在到 `bb666a6`。
+上游现在最新的公开线是 `a-publier`（`4eb6cfd`，11-27 06:27 +08），比之前的 `cd8dfc0` 多 49 个提交；`main` 是另一条更旧的线。仓库 HEAD 也指向它，直接按它拉。
 
-新历史的 tip 上是这样三个提交：`3406192` renderer port 7（`VICTORY_PORT_JOURNAL=1`，默认关；lane −2.4 ms，45.8 → 45.1 ms）、`5d6bd84` 标题纹理改在 submission prelude 里上传，修帧序和闪烁、`cd8dfc0` FidelityFX FSR 4.1.2 到 4K（`-Fsr4K`，从 DexNom/VIctory 的 ab34a8b2 移植）。
+我把 fork 的 6 个提交 rebase 到 `4eb6cfd` 上，`system` 现在到 `12fc45e`，旧 tip 留在 `backup-before-rebase2`（`bb666a6`）。只有 `gameinput.rs` 一处冲突：上游把单 pad 的兜底从 `stand_in` 改成了 `fallback(&keys)`，我保留上游语义，在上面叠加 `VICTORY_PAD_LOG` 的诊断输出。
 
-真机上游戏能从标题画面一路走到世界加载，画面是真出图的：天空、楼房、成排电线杆、亮着的窗、路灯、树，HUD 也在。数字不好看，最近一次跑到世界是 0.9 fps、1,091–1,154 ms 一帧、3,744–5,724 draws/frame。最大的坎还是 wave64。
+真正的变化是改用优化构建跑。之前所有 run 都是 `cargo build -p victory` 的 debug 构建，工作区代码 opt-level 0；换成 `--profile diag --features diagnostics`（optimized + debuginfo）后，同样的世界场景帧时间大约减半，list call 记录从 40,344 次 9.3 秒降到 42,286 次 2.1 秒，等管线创建的 1,154 ms 也归零。最近三组实测（都是 diag 构建）：
+
+| 构建 | 世界帧时间中位数 | 稳态标题栏 |
+|---|---|---|
+| fork（旧基线 `cd8dfc0`） | 515 ms | 1.9 fps / 514 ms |
+| 纯 a-publier | 485.6 ms | 2 fps / 470 ms |
+| fork rebase 到 a-publier | 503.1 ms | 2 fps / 474.6 ms |
+
+三组差异都在场景波动范围内，说明 rebase 没带来性能回退。画面是真出图的：天空、楼房、成排电线杆、亮着的窗、路灯、树，HUD 也在。现在这台机器上更早撞到的是内存和显存，不是 wave64。
 
 ## 上游是什么
 
@@ -48,12 +56,12 @@
 - 内存那条原来写成了判决，说低于 43 GiB 就会 1455。但我在 40.5 GiB 空闲时照样跑到了世界，说明这个门槛我测不出来。现在改成「标题工作集据称 40–46 GiB，长会话可能撞 1455」，数字保留。
 - 加了 `VICTORY_PAD_LOG=1`，标题来要输入时把 pad 读数打出来，好区分「前端不反应」和「前端根本没来问」。本机没有 D3D12 调试层（`0x887A002D`），驱动消息拿不到。
 
-fork 上现在比上游多 6 个提交：`97b50b7` `e3ded94` `b72f317` `913a8ac` `ec27391` `bb666a6`。
+fork 上现在比上游多 6 个提交：`12fc45e` `8d79a5d` `1bdbd8f` `033d902` `5d419fd` `579d17a`。rebase 前的旧哈希 `bb666a6` 那一串保存在 `backup-before-rebase2` 分支里。
 
 ## 这台机器
 
 ```
-VIctory 0.1.0 (bb666a6), debug build
+VIctory 0.1.0 (12fc45e), diag build（optimized + debuginfo）
 Windows 11, build 26100.3624
 CPU: AMD Ryzen 9 8945HX with Radeon Graphics, 32 threads, AVX2 yes
 Memory: 31.8 GiB RAM (18.1 GiB free), commit 42.5 GiB free of 75.7 GiB
@@ -66,7 +74,7 @@ Known blockers:
 
 内存空闲量两次运行之间会差一两个 GiB，别当固定值看。
 
-关于这台机器有三点值得说。32 lane 是 NVIDIA 的常态，能不能跑 compute 全看上游 #9 的 wave64 模拟。着色器模型这里踩过一个坑：`D3D_SHADER_MODEL_6_0` 是 `0x60` 不是 100，所以设备回的 `0x67` 就是 6.7；早先版本把本机报成 6.3，还顺手写了「标题的 shader 要 6.6」这条假阻塞，改完以后输出 6.7，运行时 mesh pipeline 也确实建得起来，两边对上了。commit 数字那条见上面。
+关于这台机器有四点值得说。32 lane 是 NVIDIA 的常态，能不能跑 compute 全看上游 #9 的 wave64 模拟。着色器模型这里踩过一个坑：`D3D_SHADER_MODEL_6_0` 是 `0x60` 不是 100，所以设备回的 `0x67` 就是 6.7；早先版本把本机报成 6.3，还顺手写了「标题的 shader 要 6.6」这条假阻塞，改完以后输出 6.7，运行时 mesh pipeline 也确实建得起来，两边对上了。commit 数字那条见上面。最后是 view heap：`victory system` 说 100 万个 `enough for the title's`，但真跑时标题要 124.5 万个，这句判断是错的，后面按实测改。
 
 ## 真机跑到哪
 
@@ -80,9 +88,9 @@ $env:VICTORY_DATA_DIR='E:\Deep\victory-data\data'
 $env:VICTORY_GAME_DIR='E:\GTA6.Xbox.v1.0.2.1-CYBERLEEK'
 ```
 
-标题画面是 Xbox 账号选择（`ACCOUNT PICKER (Y) / SCREEN NARRATION (OFF) (X) / PLAYER (A)`），30 fps、21 draws/frame。键盘能用，但窗口必须在最前：`SetForegroundWindow` 单独调会被拒，先敲一下 Alt 再调就成。按键映射在 `crates/victory-hle/src/modules/gameinput.rs`，Enter=A、Backspace=B、Esc=Menu、Tab=View、方向键=DPad。首次启动的语言、导航体验、法律声明、隐私政策和服务条款两个勾选、Confirm，这一串都能过去。
+标题画面是 Xbox 账号选择（`ACCOUNT PICKER (Y) / SCREEN NARRATION (OFF) (X) / PLAYER (A)`），30 fps、13 draws/frame。键盘能用，但窗口必须在最前：`SetForegroundWindow` 单独调会被拒，先敲一下 Alt 再调就成。按键映射在 `crates/victory-hle/src/modules/gameinput.rs`，Enter=A、Backspace=B、Esc=Menu、Tab=View、方向键=DPad。首次启动的语言、导航体验、法律声明、隐私政策和服务条款两个勾选、Confirm，这一串都能过去。
 
-然后是世界流式加载，日志开始打开 `core_restofworld.rpf`、`story000_restofworld.rpf`。最近这次的数字：0.9 fps，1,091.7–1,154.1 ms 一帧，3,744–5,724 draws/frame，`dropped 188` 到 `381`，私有内存 15.7 GB 还在涨。画面是完整的世界，不是黑屏，截图 `run8_b.png`。
+然后是世界流式加载，日志开始打开 `core_restofworld.rpf`、`story000_restofworld.rpf`。用 diag 构建最近一次的稳态：2 fps，470–515 ms 一帧，4,775–4,886 draws/frame；加载初期会到 1.5–1.9 秒一帧、5,000–10,796 draws/frame。掉帧 172–220/frame 来自 ray-tracing structure builder，另有 7 个 wave64 compute。私有内存 21.6–22.5 GB，系统只剩 0.9–1.5 GB 空闲；显存 in use 7,414 MB，预算 6,582 MB（8G 卡）。画面是完整的世界，不是黑屏，截图 `run8_b.png`。
 
 ## 现在卡在哪
 
@@ -95,15 +103,15 @@ no host pipeline: the compute program asks for wider waves than the host runs
     shaders=[compute 02384a60fda6f2d0] wave=64 host_wave=32
 ```
 
-改完再跑，run9 和 run10 里 `host pipeline refused` 都是 0 次，世界照常推进到 5,724 draws/frame。这个在 `bb666a6`，已推 fork，PR #268 下面补了复现步骤。
+改完再跑，`host pipeline refused` 不再出现，改成 7 个不同的 compute 程序各打一行 `wider waves`（run13：`02384a60`、`369cbe90`、`2da4beb3`、`6f225b64`、`5dc3b259`、`926c46ba`、`6b82bc7d`），世界照常推进到 10,796 draws/frame。这个改动在 `12fc45e`，PR #268 下面补了复现步骤。
 
-**ray-tracing stage 没翻。** `a stage of the ray-tracing pipeline is not translated`，run8 里这项是 677.6 draws/frame（更早一次 1,548），是世界内最大的单项掉帧。
+**ray-tracing stage 没翻。** 最近几次的日志是 `a stage of the ray-tracing structure builder, which is off`（`VICTORY_BVH_BUILDER=1` 才开），run11 是 220 drops/frame、run12 是 172；run8 早期一次量到 677.6 draws/frame（更早 1,548）。仍是世界内最大的单项掉帧。
 
-**动态描述符槽耗尽。** `no free dynamic descriptor slots`，大场景超过 2^18 张表。`VICTORY_DYNAMIC_SLOTS` 能调，但 NVIDIA 的 1,000,000 view 上限把余量压得很死，上游注释里就写过 2^18 在大场景不够。
+**view heap 上限。** 启动时 `host view heap capped at 1000000; views past it read a null slot count=1245184`：标题要 124.5 万个 view，NVIDIA 的 1,000,000 上限差约 24.5 万个，读到的就是 null。`no free dynamic descriptor slots` 在大场景超 2^18 张表时也会出现，`VICTORY_DYNAMIC_SLOTS` 能调，但余量同样被这 100 万压死。
 
-**内存。** lists 分配器 9 GB、windows 7 GB、uploads 4 GB，`VICTORY_MEMORY_MAP=1` 能看到。这条和小内存机器直接相关。
+**内存和显存。** run13 私有内存 21.6 GB、系统剩 877 MB 空闲（run11 是 22.5 GB）；`host copies` 4.5–4.7 GB、`host textures` 4.4 GB、`shared buffers` 274,376 个共 7.5 GB。显存这边 a-publier 新加的统计会直接说超预算：`the card's own: budget 6582 MB, in use 7414 MB`。在这台 31.8 GiB / 8G 显存的机器上，这条比 RT 更早成为限制：run11 最后系统只剩 1.5 GB 空闲，进程随后消失，日志里没留下明确的原因行；run13 是我在只剩 877 MB 空闲时手动停掉的。
 
-另外几个小的：`placed unordered texture view not mirrored`（run8 里 11 次）、按索引取的纹理在上传后变了（9 次）、`host view heap capped at 1000000`（1 次），还有 `CreatePipelineState` 被调 29 次全部返回 E_NOTIMPL。
+另外几个小的：`placed unordered texture view not mirrored`（run13 里 11 次）、按索引取的纹理在上传后变了（38 次）、`constant buffer not 256-byte aligned`（1 次）、`buffer view not on an element of its host copy`（1 次）、`a texture copied back could not be tiled`（1 次），还有 `CreatePipelineState` 被调 29 次全部返回 E_NOTIMPL。另有一次 `method not implemented object="command queue" slot=0xb8`，对应注释里的 Suspend。
 
 还有 5 个 shadow-mask trace 程序翻不过：要从堆里按计算索引取 descriptor 再读结构地址，需要 host 按 slot 提供地址表。目前 title 没创建这些程序，收益是 0，属于先修好等着的类型。
 
@@ -128,9 +136,13 @@ $env:TMP='E:\Deep\_toolchain\tmp'; $env:TEMP=$env:TMP   # 系统 TEMP 不可写
 
 # 3) 构建与运行
 cd E:\Deep\VIctory-Belobug-AMD
-cargo build -p victory
+cargo build -p victory                                   # 日常开发用，跑起来慢但编译快
+cargo build --profile diag -p victory --features diagnostics   # 测性能/看掉帧原因用这个
 .\target\debug\victory.exe system
+.\target\diag\victory.exe system
 ```
+
+测帧时间一定用 `diag`，`debug` 下工作区代码是 opt-level 0，同样的场景会慢一倍以上。`diag` 保留 diagnostics 和 debuginfo，掉帧原因、每帧统计都还在。
 
 测试这边，`cargo test --workspace` 只有 `victory-loader --test load_probe` 会挂，原因是 GNU ld 不认 MSVC 的 `/DELAYLOAD:`，属于环境限制不是仓库 bug。其余全过，`victory-gpu` 411 个测试里有 278 个真跑在 D3D12 上，大约 6.5 分钟。
 
@@ -139,3 +151,4 @@ cargo build -p victory
 - 11-26 晚：实现 #104，开 PR #268。
 - 11-27 凌晨：跑通首次启动流程到世界加载，修掉 shader model 解码、`--version` 的 commit、加 pad 日志。
 - 11-27 上午：上游 force-push 到 `cd8dfc0`，rebase 跟上，世界画面出来；定位 wave64，`bb666a6` 让它报得清楚。
+- 11-27 晚上：拉最新的 `a-publier`（`4eb6cfd`，比基线多 49 个提交），rebase `system` 到 `12fc45e`；改用 `diag` 优化构建，帧时间约减半；确认这台机器当前最早的墙是内存和显存。
